@@ -1,0 +1,50 @@
+.cleaning-stack { display: grid; gap: 12px; }
+.cleaning-stack [hidden] { display: none; }
+.cleaning-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px;
+  background: var(--paper);
+  border: 1.5px solid var(--line);
+  border-radius: var(--r);
+  color: var(--ink);
+}
+.cleaning-card h3 { font: 800 var(--t-title)/1.18 var(--display); }
+.cleaning-card h4 { font: 800 var(--t-body)/1.3 var(--body); }
+.cleaning-card h3, .cleaning-card h4, .cleaning-card p { margin: 0; }
+.cleaning-card p, .cleaning-steps { overflow-wrap: anywhere; }
+.cleaning-card .cleaning-meta { margin-top: 4px; color: var(--muted); font-size: var(--t-meta); line-height: 1.35; }
+.cleaning-head { display: flex; align-items: center; gap: 12px; }
+.cleaning-icon { display: grid; place-items: center; flex: 0 0 44px; height: 44px; background: var(--soft); font-size: 24px; }
+.cleaning-badges, .cleaning-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cleaning-status { padding: 4px 6px; border-radius: var(--r); background: var(--soft); font: 700 var(--t-micro)/1.3 var(--mono); }
+.cleaning-card.is-complete .cleaning-status { background: var(--mint); }
+.cleaning-card details > summary { min-height: 44px; padding: 12px 0; font-weight: 700; cursor: pointer; }
+.cleaning-steps { margin: 0; padding-inline-start: 20px; font-size: var(--t-body); line-height: 1.48; }
+.cleaning-steps li + li { margin-top: 4px; }
+.cleaning-choice { display: grid; gap: 8px; }
+.cleaning-btn {
+  min-height: 44px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1.5px solid var(--edge);
+  border-radius: var(--r);
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 700;
+  text-align: left;
+}
+.cleaning-btn.primary { background: var(--ink); border-color: var(--ink); color: var(--cream); }
+.cleaning-btn:disabled { opacity: .62; cursor: default; }
+.cleaning-btn:focus-visible, .cleaning-card summary:focus-visible { outline: 2px solid var(--plum); outline-offset: 2px; }
+.cleaning-pause { background: var(--mint); }
+.cleaning-pause-title { font: 800 var(--t-title)/1.25 var(--display); }
+.cleaning-pause-title span { display: inline-block; animation: cleaning-wave .5s ease-out; }
+.cleaning-card.celebrate { animation: cleaning-done .6s ease-out; }
+@keyframes cleaning-wave { 50% { transform: rotate(-12deg); } }
+@keyframes cleaning-done { 45% { background: var(--mint); transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) {
+  .cleaning-pause-title span, .cleaning-card.celebrate { animation: none; }
+}

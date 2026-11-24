@@ -13,6 +13,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400;0,500;0,600;0,700;0,800;1,800&family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,200..800&family=Courier+Prime:wght@400;700&family=Playfair+Display:ital,wght@1,800;1,900&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="stylesheet" href="cleaning.css">
+<script src="cleaning.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 /* ====== TOKEN (identità "Via Frejus": melanzana + crema + verde menta) ======
@@ -1123,7 +1125,7 @@ function openMe(){
       <div class="item-sub">${role}${me.email ? `<br>${esc(me.email)}` : ''}</div></div></div>
     <div class="rows">
       ${guest ? '' : notif}
-      ${isAdmin() ? `<button type="button" class="row" data-a="go:gestione"><span class="ri">${I.gear}</span><span class="rt">Gestione casa<span class="rs">Giro, checklist, coinquilini</span></span><span class="chev">${I.chev}</span></button>` : ''}
+      ${isAdmin() ? `<button type="button" class="row" data-a="go:gestione"><span class="ri">${I.gear}</span><span class="rt">Gestione casa<span class="rs">Turni e coinquilini</span></span><span class="chev">${I.chev}</span></button>` : ''}
       <button type="button" class="row" data-a="logout"><span class="ri">${I.logout}</span><span class="rt">Esci<span class="rs">${guest ? 'Il tuo nickname sparisce' : 'Rientri con email e password'}</span></span></button>
     </div>
     ${guest ? '' : `<p class="ver">${VERSIONE}</p>`}`);
@@ -1150,20 +1152,32 @@ function joinAnswer(id, yes){
 
 /* Il post-it "Tocca a te": il turno che ti riguarda adesso, con il prossimo passaggio da spuntare */
 async function loadDuty(){
-  const err = await fetchChoreData();
+  const viewer = me.id;
+  const { data: current, error } = await cleaningUI.read();
   const el = $('#duty'); if (!el) return;
+  if (me?.id !== viewer) return;
+  if (error) { el.innerHTML = errorBox(error); return; }
+  if (current?.active) {
+    cleaningUI.paint(el, cleaningUI.home(current));
+    const calendar = $('#cal');
+    if (calendar) cleaningUI.paint(calendar, cleaningUI.calendar(current));
+    return;
+  }
+  const err = await fetchChoreData();
+  if ($('#duty') !== el || me?.id !== viewer) return;
   if (err) { el.innerHTML = `<div class="postit rest"><div class="pi-body"><span class="pi-lab">Pulizie</span><p class="pi-d" style="margin-top:12px">${esc(errMsg(err))}</p></div></div>`; return; }
-  drawDuty(); drawCal();
+  drawDuty(current?.activation_week); drawCal(current?.activation_week);
+  if (current?.enabled) el.insertAdjacentHTML('beforeend', '<button type="button" class="cleaning-btn" data-a="clean:absences">Ferie / Pausa</button>');
 }
 const passoCorto = p => String(p).split(/[:,(]/)[0].trim();
-function drawDuty(){
+function drawDuty(activationWeek){
   const el = $('#duty'); if (!el) return;
   const mon = thisMonday(), all = weekShifts(mon);
   const todo = all.filter(s => s.who === me.id && !s.done);
   const first = todo.find(s => s.status === 'now') || todo.find(s => s.status === 'late') || todo[0];
   if (!first) {
     const mine = all.some(s => s.who === me.id);
-    const nx = mine || !attivo(mon) ? null : nextShiftOf(me.id);
+    const nx = mine || !attivo(mon) ? null : nextShiftOf(me.id, activationWeek);
     const ttl = mine ? 'Turni fatti, grazie' : !attivo(mon) ? `Le pulizie partono lunedì ${dayMon(ROT_INIZIO)}` : 'Questa settimana riposi';
     el.innerHTML = `<div class="postit rest"><div class="pi-body"><span class="pi-lab" style="background:var(--ink)">Pulizie</span>
       <p class="pi-t" style="font-size:var(--t-display-s);text-transform:none;font-stretch:80%">${esc(ttl)}</p>
@@ -1185,10 +1199,11 @@ function drawDuty(){
       <div class="pi-btns">${btns}</div></div><div class="pi-mascot" aria-hidden="true"></div></div>`;
 }
 /* In arrivo: i prossimi turni di casa, dal più vicino */
-function drawCal(){
+function drawCal(activationWeek){
   const el = $('#cal'); if (!el) return;
   const t = today(), base = thisMonday(), out = [];
   for (let k = 0; k < 3; k++) for (const s of weekShifts(addDays(base, 7 * k))) {
+    if (activationWeek && s.mon >= activationWeek) continue;
     if (s.done || s.a < t && s.who !== me.id) continue;
     const late = s.status === 'late';
     out.push({ s, late, d: late || s.da < t ? t : s.da });
@@ -1211,7 +1226,7 @@ async function loadHighlights(){
     sb.from('shopping').select('nome', { count:'exact' }).eq('comprato', false).order('created_at', { ascending:false }).limit(4),
     sb.from('guests').select('nome_ospite').lte('dal', t).gte('al', t),
     sb.from('polls').select('id,domanda,poll_voters(user_id)').eq('chiuso', false).order('created_at', { ascending:false }),
-    sb.from('chore_swaps').select('settimana,turno,richiedente').eq('destinatario', me.id).eq('stato', 'attesa'),
+    cleaningSwapHighlights(t),
     sb.from('rimborsi').select('da').eq('a', me.id).eq('stato', 'attesa')
   ]);
   const el = $('#highlights');
@@ -1245,7 +1260,7 @@ async function loadHighlights(){
       title: rb.data.length === 1 ? `${esc(nm(rb.data[0].da))} dice di averti pagato` : `${rb.data.length} rimborsi da confermare` });
   }
   if (!sw.error) {
-    const live = sw.data.filter(w => SHIFT[w.turno] && shiftEnd(w.settimana, w.turno) >= t);
+    const live = sw.data;
     setBadge('faccende', live.length);
     if (live.length) rows.push({ icon:I.chores, go:'faccende', sub:'Cambio turno da approvare',
       title: live.length === 1 ? `${esc(nm(live[0].richiedente))} ti chiede un cambio` : `${live.length} richieste di cambio turno` });
@@ -1256,6 +1271,18 @@ async function loadHighlights(){
   }
   if (el) el.innerHTML = rows.map(r => `<button class="row" data-a="go:${r.go}"><span class="ri">${r.icon}</span>
       <span class="rt">${r.title}<span class="rs">${r.sub}</span></span><span class="rv hot">Apri</span></button>`).join('');
+}
+
+async function cleaningSwapHighlights(day){
+  const viewer = me.id;
+  const { data, error } = await cleaningUI.read();
+  if (error) return { error };
+  if (data?.active) return { data: (data.swaps || []).filter(s => s.status === 'pending' && s.recipient === viewer)
+    .map(s => ({ richiedente: s.requester })) };
+  const legacy = await sb.from('chore_swaps').select('settimana,turno,richiedente').eq('destinatario', viewer).eq('stato', 'attesa');
+  if (legacy.error) return legacy;
+  return { data: legacy.data.filter(w => SHIFT[w.turno] && shiftEnd(w.settimana, w.turno) >= day &&
+    (!data?.activation_week || w.settimana < data.activation_week)) };
 }
 
 /* ================= BACHECA (avvisi rapidi) ================= */
@@ -1533,7 +1560,8 @@ const PASSI_BASE = Object.fromEntries(SHIFTS.map(s => [s.id, [...s.passi]]));   
    Ogni lunedì chi aveva A passa a B, chi aveva B riposa. Cambiare nome non sposta più i turni.
    Se cambi ROT_INIZIO o ROT_SPOSTA, cambiali anche nella funzione turno_di su Supabase (promemoria push). */
 const ROT_INIZIO = '2026-10-05', ROT_SPOSTA = 0;   // ROT_INIZIO deve essere un lunedì: prima di questa data non ci sono turni
-const WEEK_MIN = -2, WEEK_MAX = 8;                  // settimane consultabili
+const WEEK_MAX = 8;
+const firstCleaningWeekOffset = () => Math.min(-2, Math.floor(daysBetween(thisMonday(), ROT_INIZIO) / 7));
 
 const mod = (a, n) => ((a % n) + n) % n;
 const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
@@ -1613,10 +1641,11 @@ function shiftInfo(mon, sid){
   return { mon, sid, def, task: def.task, who: assigneeOf(mon, sid), passi, tot: def.passi.length, done, status, da, a };
 }
 const weekShifts = mon => attivo(mon) ? SHIFTS.map(s => shiftInfo(mon, s.id)) : [];
-function nextShiftOf(uid){
+function nextShiftOf(uid, activationWeek){
   const base = thisMonday(), t = today();
   for (let k = 0; k <= WEEK_MAX; k++) {
     const mon = addDays(base, 7 * k);
+    if (activationWeek && mon >= activationWeek) break;
     if (attivo(mon)) for (const s of SHIFTS) if (shiftEnd(mon, s.id) >= t && assigneeOf(mon, s.id) === uid && !shiftInfo(mon, s.id).done) return { mon, sid: s.id };
   }
   return null;
@@ -1626,7 +1655,7 @@ async function fetchChoreData(){
   const base = thisMonday();
   const [lg, sw, gv, cf] = await Promise.all([
     sb.from('chore_log').select('settimana,turno,passi,completato_il')
-      .gte('settimana', addDays(base, 7 * WEEK_MIN)).lte('settimana', addDays(base, 7 * WEEK_MAX)),
+      .gte('settimana', addDays(base, 7 * firstCleaningWeekOffset())).lte('settimana', addDays(base, 7 * WEEK_MAX)),
     sb.from('chore_swaps').select('*').neq('stato', 'annullato').order('created_at').limit(500),
     sb.from('giro_versioni').select('dal,giro').order('dal'),
     sb.from('casa_config').select('checklist').eq('id', 1).maybeSingle()
@@ -1642,25 +1671,44 @@ async function fetchChoreData(){
 }
 
 function renderFaccende(){
-  $('#view').innerHTML = hero('Turni', { sub: 'Ogni settimana tre turni fatti da tre persone diverse: bagno di mercoledì, bagno del weekend e cucina. Il quarto riposa. Ogni lunedì si scala di un posto, e chi ha fatto la cucina riposa.' }) + `
+  $('#view').innerHTML = hero('Turni') + `
     <section class="sheet">
-      <div class="inbox" id="inbox"></div>
-      <div id="chore-week"><div class="skeleton"></div></div>
-      <div class="row-title"><h2>Il giro</h2></div>
-      <div class="rota" id="rota"></div>
-      <p class="hint">Giro di base, senza i cambi turno accettati.</p>
+      <div id="cleaning-week"><div class="skeleton"></div></div>
+      <div id="cleaning-legacy" hidden>
+        <div class="inbox" id="inbox"></div>
+        <div id="chore-week"></div>
+        <div class="row-title"><h2>Il giro</h2></div>
+        <div class="rota" id="rota"></div>
+        <p class="hint">Giro di base, senza i cambi turno accettati.</p>
+      </div>
     </section>`;
   loadChores();
 }
 async function loadChores(){
-  if (!$('#chore-week')) return;
+  const modern = $('#cleaning-week');
+  const legacy = $('#cleaning-legacy');
+  if (!modern || !legacy) return;
+  const viewer = me.id, offset = weekOff;
+  const stillHere = () => me?.id === viewer && weekOff === offset && modern === $('#cleaning-week');
+  const { data, error } = await cleaningUI.read(addDays(cleaningUI.currentWeek(), 7 * offset));
+  if (!stillHere()) return;
+  if (data?.active || error) {
+    legacy.hidden = true;
+    modern.hidden = false;
+    cleaningUI.paint(modern, error ? `${errorBox(error)}<button type="button" class="cleaning-btn" data-a="clean-retry">Riprova</button>` : cleaningUI.week(data));
+    return;
+  }
   const err = await fetchChoreData();
-  if (!$('#chore-week')) return;
+  if (!stillHere()) return;
+  modern.hidden = true;
+  legacy.hidden = false;
+  legacy.dataset.activationWeek = data?.activation_week || '';
   if (err) { $('#chore-week').innerHTML = errorBox(err); return; }
   drawChores();
 }
 function drawChores(){
-  if (!$('#chore-week')) return;
+  const legacy = $('#cleaning-legacy');
+  if (!legacy || legacy.hidden) return;
   const focus = document.activeElement?.dataset?.a;
   const mon = addDays(thisMonday(), 7 * weekOff);
   const lab = weekOff === 0 ? 'Questa settimana' : weekOff === 1 ? 'Prossima settimana' : weekOff === -1 ? 'Settimana scorsa'
@@ -1668,12 +1716,12 @@ function drawChores(){
   $('#inbox').innerHTML = inboxHTML();
   $('#chore-week').innerHTML = `
     <div class="weeknav">
-      <button class="nb" data-a="wk:-1" aria-label="Settimana precedente" ${weekOff <= WEEK_MIN ? 'disabled' : ''}>${I.back}</button>
+      <button class="nb" data-a="wk:-1" aria-label="Settimana precedente" ${weekOff <= firstCleaningWeekOffset() ? 'disabled' : ''}>${I.back}</button>
       <div class="wl" aria-live="polite"><b>${lab}</b><span>${fmtDays(mon, addDays(mon, 6))}</span></div>
       <button class="nb" data-a="wk:1" aria-label="Settimana successiva" ${weekOff >= WEEK_MAX ? 'disabled' : ''}>${I.chev}</button>
     </div>
     ${attivo(mon) ? weekShifts(mon).map(shiftCard).join('') : emptyBox(`Nessun turno: le pulizie partono lunedì ${dayMon(ROT_INIZIO)}.`)}`;
-  $('#rota').innerHTML = rotaHTML(mon);
+  $('#rota').innerHTML = rotaHTML(mon, legacy.dataset.activationWeek);
   document.querySelectorAll('.peek').forEach(d => { if (openPeek.has(d.dataset.k)) d.open = true; });
   if (focus) document.querySelector(`[data-a="${focus}"]`)?.focus();
 }
@@ -1740,12 +1788,13 @@ function inboxHTML(){
   return html.join('');
 }
 
-function rotaHTML(mon){
+function rotaHTML(mon, activationWeek){
   const chip = id => id ? `<div class="who-chip">${avatar(id)}<span>${id === me.id ? 'Tu' : esc((profiles[id] || 'Qualcuno').split(' ')[0])}</span></div>` : '<span>—</span>';
   const cur = thisMonday();
   return `<div class="rota-row head"><span>Sett.</span><span>Bagno mer</span><span>Bagno weekend</span><span>Cucina</span><span>Riposo</span></div>` +
     [0, 1, 2, 3].map(k => {
       const m = addDays(mon, 7 * k), r = rotation(m);
+      if (activationWeek && m >= activationWeek) return '';
       return `<div class="rota-row ${m === cur ? 'cur' : ''}"><span class="wk">${fmtDays(m, addDays(m, 6))}</span>${SLOT_ORDER.map(s => chip(r[s])).join('')}
         <div class="rest">${r.rest.map(id => avatar(id, 'sm')).join('') || '—'}</div></div>`;
     }).join('');
@@ -2410,11 +2459,12 @@ function deleteNote(id){
    Giro delle pulizie, turni spostati d'autorità, checklist, coinquilini.
    I controlli veri sono su Supabase (funzioni admin_*): qui c'è solo l'interfaccia. */
 const SLOT_ART = { 'mer-bagno':'il bagno di mercoledì', 'we-bagno':'il bagno del weekend', 'we-cucina':'la cucina' };
-let admGiroWeek = null;
+let admGiroWeek = null, admCleaningActivation = null;
 function admWeeks(sel){
   const base = thisMonday();
   return [...Array(9)].map((_, k) => {
     const m = addDays(base, 7 * k);
+    if (admCleaningActivation && m >= admCleaningActivation) return '';
     const lab = k === 0 ? 'Questa settimana' : k === 1 ? 'Prossima settimana' : 'Settimana';
     return `<option value="${m}" ${m === sel ? 'selected' : ''}>${lab}, ${fmtDays(m, addDays(m, 6))}</option>`;
   }).join('');
@@ -2423,12 +2473,19 @@ function renderGestione(){
   if (!isAdmin()) { tab = 'home'; return renderHome(); }
   $('#view').innerHTML = hero('Gestione casa', { sub: 'Solo per gli amministratori. Ogni modifica vale subito per tutti.' }) + `
     <section class="sheet">
-      <div class="row-title"><h2>Giro delle pulizie</h2></div>
-      <div class="card" id="adm-giro"><div class="skeleton"></div></div>
-      <div class="row-title"><h2>Sposta un turno</h2></div>
-      <div class="card" id="adm-assegna"><div class="skeleton"></div></div>
-      <div class="row-title"><h2>Checklist dei turni</h2></div>
-      <div class="card" id="adm-check"><div class="skeleton"></div></div>
+      <div id="adm-cleaning-legacy">
+        <div class="row-title"><h2>Giro delle pulizie</h2></div>
+        <div class="card" id="adm-giro"><div class="skeleton"></div></div>
+        <div class="row-title"><h2>Sposta un turno</h2></div>
+        <div class="card" id="adm-assegna"><div class="skeleton"></div></div>
+        <div class="row-title"><h2>Checklist dei turni</h2></div>
+        <div class="card" id="adm-check"><div class="skeleton"></div></div>
+      </div>
+      <div id="adm-cleaning-link" class="cleaning-stack" hidden>
+        <div class="row-title"><h2>Gestione delle pulizie</h2></div>
+        <p>Da Turni puoi riassegnare un incarico e modificare le istruzioni.</p>
+        <button type="button" class="cleaning-btn" data-a="go:faccende">Gestisci i turni</button>
+      </div>
       <div class="row-title"><h2>Coinquilini</h2></div>
       <div class="list" id="adm-people"></div>
     </section>`;
@@ -2437,18 +2494,29 @@ function renderGestione(){
 /* full = ridisegna anche i moduli; senza, aggiorna solo la lista dei coinquilini (così gli aggiornamenti
    in tempo reale non cancellano quello che stai scrivendo) */
 async function loadGestione(full){
-  if (!$('#adm-giro')) return;
+  const legacy = $('#adm-cleaning-legacy');
+  if (!legacy) return;
   await loadProfiles();
-  const err = await fetchChoreData();
-  if (!$('#adm-giro')) return;
+  if ($('#adm-cleaning-legacy') !== legacy) return;
   if (!isAdmin()) return go('home');
-  if (err) { $('#adm-giro').innerHTML = errorBox(err); return; }
-  if (full === true) { drawAdmGiro(); drawAdmAssegna(); drawAdmCheck(); }
   drawAdmPeople();
+  if (full !== true) return;
+  const { data, error } = await cleaningUI.read();
+  if ($('#adm-cleaning-legacy') !== legacy) return;
+  if (error) { $('#adm-giro').innerHTML = errorBox(error); return; }
+  legacy.hidden = Boolean(data?.active);
+  $('#adm-cleaning-link').hidden = !data?.active;
+  if (data?.active) return;
+  admCleaningActivation = data?.activation_week || null;
+  const err = await fetchChoreData();
+  if ($('#adm-cleaning-legacy') !== legacy) return;
+  if (err) { $('#adm-giro').innerHTML = errorBox(err); return; }
+  drawAdmGiro(); drawAdmAssegna(); drawAdmCheck();
 }
 function drawAdmGiro(){
   const el = $('#adm-giro'); if (!el) return;
-  const mon = admGiroWeek || addDays(thisMonday(), 7);
+  const desired = admGiroWeek || addDays(thisMonday(), 7);
+  const mon = admCleaningActivation && desired >= admCleaningActivation ? thisMonday() : desired;
   const r = rotation(mon), L = profileList().map(p => p.id);
   const posti = L.map((_, k) => ({ lbl: k < 3 ? SLOT_NOME[SLOT_ORDER[k]] : 'Riposo', who: k < 3 ? r[SLOT_ORDER[k]] : r.rest[k - 3] }));
   const used = new Set();
@@ -2650,7 +2718,8 @@ const A = {
   me: openMe, logout, recheck: () => recheck(true),
   notif: async () => { await askNotif(); if (!$('#overlay').hidden && $('.me-id')) openMe(); },
   joinyes: id => joinAnswer(id, true), joinno: id => joinAnswer(id, false),
-  wk: d => { weekOff = Math.max(WEEK_MIN, Math.min(WEEK_MAX, weekOff + Number(d))); drawChores(); },
+  wk: d => { weekOff = Math.max(firstCleaningWeekOffset(), Math.min(WEEK_MAX, weekOff + Number(d))); loadChores(); },
+  clean: cleaningUI.action, 'clean-retry': loadChores,
   step: toggleStep, swap: swapForm, swcancel: swapCancel,
   swyes: id => swapAnswer(id, true), swno: id => swapAnswer(id, false),
   ss: toggleShopSel, sd: deleteShop, sback: unbuy, 'clear-bought': clearBought, bought: boughtForm,
@@ -2717,6 +2786,8 @@ async function choreReminder(){
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const t = today();
   if (localStorage.getItem('avvisoTurno') === t) return;
+  const { data, error } = await cleaningUI.read();
+  if (data?.active || error) return;
   if (await fetchChoreData()) return;
   const s = weekShifts(thisMonday()).find(x => x.who === me.id && !x.done && (x.status === 'now' || x.status === 'late'));
   if (!s) return;
@@ -2767,6 +2838,11 @@ function subscribe(){
     .subscribe();
 }
 setInterval(() => { if (me && !pending && ['home', 'bagno', 'faccende', 'bacheca'].includes(tab) && $('#overlay').hidden) refresh(); }, 60000);
+setInterval(() => {
+  if (!me || pending || document.hidden || !$('#overlay').hidden || !$('#cf').hidden) return;
+  if (tab === 'home' && $('#duty .cleaning-stack')) loadDuty();
+  if (tab === 'faccende' && $('#cleaning-week .cleaning-stack') && !$('#cleaning-week').hidden) loadChores();
+}, 30000);
 document.addEventListener('visibilitychange', async () => {
   if (document.hidden || !me) return;
   if (pending) return recheck(false);

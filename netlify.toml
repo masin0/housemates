@@ -1,6 +1,10 @@
 [build]
   publish = "site"
 
+[context.deploy-preview]
+  command = "npm ci --prefix test --no-audit --no-fund && node test/preview/build.mjs"
+  publish = ".preview"
+
 [[headers]]
   for = "/sw.js"
   [headers.values]
